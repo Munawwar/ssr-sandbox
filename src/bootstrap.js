@@ -10,6 +10,7 @@ const {
   op_crypto_subtle_digest,
   op_btoa,
   op_atob,
+  op_fetch,
 } = Deno.core.ops;
 
 // ============================================================================
@@ -376,6 +377,232 @@ globalThis.crypto = {
   },
 
   subtle: cryptoSubtle,
+};
+
+// ============================================================================
+// Fetch API (Headers, Request, Response, fetch)
+// ============================================================================
+
+globalThis.Headers = class Headers {
+  #headers = new Map();
+
+  constructor(init) {
+    if (init instanceof Headers) {
+      for (const [key, value] of init) {
+        this.append(key, value);
+      }
+    } else if (Array.isArray(init)) {
+      for (const [key, value] of init) {
+        this.append(key, value);
+      }
+    } else if (init && typeof init === "object") {
+      for (const [key, value] of Object.entries(init)) {
+        this.append(key, value);
+      }
+    }
+  }
+
+  append(name, value) {
+    const key = name.toLowerCase();
+    const existing = this.#headers.get(key);
+    if (existing) {
+      this.#headers.set(key, existing + ", " + value);
+    } else {
+      this.#headers.set(key, String(value));
+    }
+  }
+
+  delete(name) {
+    this.#headers.delete(name.toLowerCase());
+  }
+
+  get(name) {
+    return this.#headers.get(name.toLowerCase()) ?? null;
+  }
+
+  has(name) {
+    return this.#headers.has(name.toLowerCase());
+  }
+
+  set(name, value) {
+    this.#headers.set(name.toLowerCase(), String(value));
+  }
+
+  *entries() {
+    yield* this.#headers.entries();
+  }
+
+  *keys() {
+    yield* this.#headers.keys();
+  }
+
+  *values() {
+    yield* this.#headers.values();
+  }
+
+  [Symbol.iterator]() {
+    return this.entries();
+  }
+
+  forEach(callback, thisArg) {
+    for (const [key, value] of this.#headers) {
+      callback.call(thisArg, value, key, this);
+    }
+  }
+};
+
+globalThis.Request = class Request {
+  #url;
+  #method;
+  #headers;
+  #body;
+
+  constructor(input, init = {}) {
+    if (input instanceof Request) {
+      this.#url = input.url;
+      this.#method = init.method || input.method;
+      this.#headers = new Headers(init.headers || input.headers);
+      this.#body = init.body ?? input.#body;
+    } else {
+      this.#url = String(input);
+      this.#method = (init.method || "GET").toUpperCase();
+      this.#headers = new Headers(init.headers);
+      this.#body = init.body ?? null;
+    }
+  }
+
+  get url() { return this.#url; }
+  get method() { return this.#method; }
+  get headers() { return this.#headers; }
+  get body() { return this.#body; }
+
+  clone() {
+    return new Request(this);
+  }
+
+  async text() {
+    return this.#body ? String(this.#body) : "";
+  }
+
+  async json() {
+    return JSON.parse(await this.text());
+  }
+};
+
+globalThis.Response = class Response {
+  #body;
+  #init;
+  #headers;
+
+  constructor(body, init = {}) {
+    this.#body = body ?? null;
+    this.#init = init;
+    this.#headers = new Headers(init.headers);
+  }
+
+  get ok() {
+    const status = this.#init.status ?? 200;
+    return status >= 200 && status < 300;
+  }
+
+  get status() {
+    return this.#init.status ?? 200;
+  }
+
+  get statusText() {
+    return this.#init.statusText ?? "";
+  }
+
+  get headers() {
+    return this.#headers;
+  }
+
+  get url() {
+    return this.#init.url ?? "";
+  }
+
+  get bodyUsed() {
+    return false; // Simplified
+  }
+
+  clone() {
+    return new Response(this.#body, this.#init);
+  }
+
+  async text() {
+    return this.#body ? String(this.#body) : "";
+  }
+
+  async json() {
+    return JSON.parse(await this.text());
+  }
+
+  async arrayBuffer() {
+    const text = await this.text();
+    return new TextEncoder().encode(text).buffer;
+  }
+
+  static json(data, init = {}) {
+    return new Response(JSON.stringify(data), {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        ...init.headers,
+      },
+    });
+  }
+
+  static error() {
+    return new Response(null, { status: 0, statusText: "" });
+  }
+
+  static redirect(url, status = 302) {
+    return new Response(null, {
+      status,
+      headers: { location: url },
+    });
+  }
+};
+
+globalThis.fetch = async function fetch(input, init = {}) {
+  let url, method, headers, body;
+
+  if (input instanceof Request) {
+    url = input.url;
+    method = init.method || input.method;
+    headers = {};
+    for (const [key, value] of (init.headers ? new Headers(init.headers) : input.headers)) {
+      headers[key] = value;
+    }
+    body = init.body ?? (input.body ? await input.text() : null);
+  } else {
+    url = String(input);
+    method = init.method || "GET";
+    headers = {};
+    if (init.headers) {
+      const h = new Headers(init.headers);
+      for (const [key, value] of h) {
+        headers[key] = value;
+      }
+    }
+    body = init.body ?? null;
+  }
+
+  // Call the Rust op (op_fetch returns a promise)
+  const result = await op_fetch({
+    url,
+    method,
+    headers: Object.keys(headers).length > 0 ? headers : null,
+    body: body ? String(body) : null,
+  });
+
+  // Convert to Response object
+  return new Response(result.body, {
+    status: result.status,
+    statusText: result.status_text,
+    headers: result.headers,
+    url: result.url,
+  });
 };
 
 // ============================================================================

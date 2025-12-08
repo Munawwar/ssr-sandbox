@@ -9,6 +9,7 @@
 //! - Module loading from allowed directory only
 //! - No fs, net, env, or other system access
 
+use crate::fetch::{op_fetch, FetchConfig};
 use crate::loader::SandboxedLoader;
 use anyhow::{anyhow, Error};
 use deno_core::{op2, JsRuntime, ModuleSpecifier, OpState, PollEventLoopOptions, RuntimeOptions};
@@ -131,6 +132,7 @@ deno_core::extension!(
         op_crypto_subtle_digest,
         op_btoa,
         op_atob,
+        op_fetch,
     ],
     esm_entry_point = "ext:ssr_runtime/bootstrap.js",
     esm = ["ext:ssr_runtime/bootstrap.js" = "src/bootstrap.js"],
@@ -144,6 +146,8 @@ pub struct SandboxConfig {
     pub max_heap_size: Option<usize>,
     /// Maximum time for a single render in milliseconds (default: 30000ms, None = unlimited)
     pub timeout_ms: Option<u64>,
+    /// Allowed origins for fetch() (empty = fetch disabled)
+    pub allowed_origins: Vec<String>,
 }
 
 impl Default for SandboxConfig {
@@ -152,6 +156,7 @@ impl Default for SandboxConfig {
             chunks_dir: String::from("./chunks"),
             max_heap_size: Some(64 * 1024 * 1024), // 64MB default
             timeout_ms: Some(30_000), // 30 seconds default
+            allowed_origins: vec![], // fetch disabled by default
         }
     }
 }
@@ -188,6 +193,11 @@ pub fn create_runtime(config: &SandboxConfig) -> Result<JsRuntime, Error> {
 
     // Initialize console output capture in state
     runtime.op_state().borrow_mut().put(ConsoleOutput::default());
+
+    // Initialize fetch config
+    runtime.op_state().borrow_mut().put(FetchConfig {
+        allowed_origins: config.allowed_origins.clone(),
+    });
 
     Ok(runtime)
 }

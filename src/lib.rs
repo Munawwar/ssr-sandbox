@@ -34,8 +34,10 @@
 //! }
 //! ```
 
+mod fetch;
 mod loader;
 mod runtime;
 
+pub use fetch::FetchConfig;
 pub use loader::SandboxedLoader;
 pub use runtime::{create_runtime, execute_ssr, ConsoleOutput, SandboxConfig, SsrResult};

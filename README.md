@@ -31,7 +31,7 @@ cargo build --release
 - We want to utilize JS engine JIT optimizations for performance, so trying to isolate requests from each other is a non-goal.
 - ESM imports and dynamic imports are allowed within a filesystem directory. External origin imports are not allowed at the moment
 - We also have to make sure the JS code doesn't consume all the memory of the machine or go into infinite loop
-- fetch() isn't allowed at all at the moment. TODO: If we implement this we would have an allowlist of origins / URL prefixes.
+- `fetch()` is available but restricted to explicitly allowed origins via `--allow-origin`. Redirects are only followed within the same origin.
 - Not all web APIs will be implemented. We are keeping the scope limited to what's needed for a typical SSR bundle.
 
 ## Security
@@ -39,7 +39,7 @@ cargo build --release
 The sandbox blocks the following:
 
 - Filesystem access (`fs.readFile`, etc.)
-- Network access (`fetch`, `http`)
+- Network access (except allowed origins via `--allow-origin`)
 - Environment variables (`process.env`)
 - Child processes (`child_process`)
 - Dynamic imports outside sandbox directory
@@ -65,6 +65,8 @@ The sandbox provides these standard Web APIs for SSR compatibility:
 | `crypto.getRandomValues` | ✓ |
 | `crypto.subtle.digest` | ✓ SHA-256/384/512 |
 | `Intl.*` | ✓ V8 built-in |
+| `fetch` | ✓ Restricted to allowed origins |
+| `Headers/Request/Response` | ✓ For fetch API |
 | `setTimeout/setInterval` | Stubbed (no-op) |
 | `requestAnimationFrame` | Stubbed (no-op) |
 | `queueMicrotask` | ✓ V8 built-in |
@@ -94,6 +96,7 @@ export default async function render(props) {
 |--------|-------------|
 | `--max-heap-size <MB>` | Maximum V8 heap size in megabytes (default: 64). Use 0 for unlimited (not recommended). |
 | `--timeout <ms>` | Maximum render time in milliseconds (default: 30000). Use 0 for unlimited (not recommended). |
+| `--allow-origin <url>` | Allow `fetch()` to this origin (can be specified multiple times). Example: `--allow-origin https://api.example.com` |
 
 **\* Timeout note:** When a render times out, the V8 isolate is terminated and recreated. This means the next request after a timeout will incur a cold start penalty (~10ms instead of ~0.2ms). Timeouts should be rare in production.
 
@@ -106,6 +109,9 @@ For production use - keeps V8 warm for fast subsequent renders:
 
 # With custom heap limit
 ./target/release/ssr-sandbox --max-heap-size 256 --server ./dist/chunks
+
+# With allowed fetch origin
+./target/release/ssr-sandbox --allow-origin https://api.example.com --server ./dist/chunks
 ```
 
 Protocol (stdin/stdout):
@@ -123,7 +129,7 @@ Length:1234
 
 ### Single-Shot Mode (mostly for testing purpose)
 
-This is for testing purpose mainly and not really meant for production use. The example takes 6ms on my machine and that's not fast enough for production use.
+This is for testing purpose mainly and not really meant for production use. The example takes 11ms on my machine and that's not fast enough for production use.
 
 ```bash
 ./target/release/ssr-sandbox [options] <chunks-dir> <entry-point> [props-json]

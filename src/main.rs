@@ -42,11 +42,14 @@ fn print_usage() {
     eprintln!("                        Use 0 for unlimited (not recommended)");
     eprintln!("  --timeout <ms>        Maximum render time in milliseconds (default: 30000)");
     eprintln!("                        Use 0 for unlimited (not recommended)");
+    eprintln!("  --allow-origin <url>  Allow fetch() to this origin (can be specified multiple times)");
+    eprintln!("                        Example: --allow-origin https://api.example.com");
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  ssr-sandbox ./dist/chunks ./dist/chunks/entry.js '{{\"page\":\"home\"}}'");
     eprintln!("  ssr-sandbox --server ./dist/chunks");
     eprintln!("  ssr-sandbox --timeout 5000 --server ./dist/chunks");
+    eprintln!("  ssr-sandbox --allow-origin https://api.example.com --server ./dist/chunks");
 }
 
 fn parse_heap_size(args: &[String]) -> Option<usize> {
@@ -75,6 +78,18 @@ fn parse_timeout(args: &[String]) -> Option<u64> {
     None
 }
 
+fn parse_allowed_origins(args: &[String]) -> Vec<String> {
+    let mut origins = vec![];
+    for i in 0..args.len() {
+        if args[i] == "--allow-origin" {
+            if let Some(origin) = args.get(i + 1) {
+                origins.push(origin.clone());
+            }
+        }
+    }
+    origins
+}
+
 fn filter_options(args: &[String]) -> Vec<String> {
     let mut result = vec![args[0].clone()];
     let mut skip_next = false;
@@ -83,7 +98,7 @@ fn filter_options(args: &[String]) -> Vec<String> {
             skip_next = false;
             continue;
         }
-        if arg == "--max-heap-size" || arg == "--timeout" {
+        if arg == "--max-heap-size" || arg == "--timeout" || arg == "--allow-origin" {
             skip_next = true;
             continue;
         }
@@ -93,7 +108,7 @@ fn filter_options(args: &[String]) -> Vec<String> {
 }
 
 /// Run in single-shot mode (original behavior)
-async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option<&str>, max_heap_size: Option<usize>, timeout_ms: Option<u64>) -> Result<()> {
+async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option<&str>, max_heap_size: Option<usize>, timeout_ms: Option<u64>, allowed_origins: Vec<String>) -> Result<()> {
     let props: serde_json::Value = match props_json {
         Some(json) => serde_json::from_str(json).map_err(|e| anyhow!("Invalid props JSON: {}", e))?,
         None => serde_json::json!({}),
@@ -103,6 +118,7 @@ async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option
         chunks_dir: chunks_dir.to_string(),
         max_heap_size: max_heap_size.or(Some(64 * 1024 * 1024)),
         timeout_ms: timeout_ms.or(Some(30_000)),
+        allowed_origins,
     };
 
     let mut runtime = create_runtime(&config)?;
@@ -126,11 +142,12 @@ async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option
 }
 
 /// Run in server mode (persistent process, reads requests from stdin)
-async fn run_server(chunks_dir: &str, max_heap_size: Option<usize>, timeout_ms: Option<u64>) -> Result<()> {
+async fn run_server(chunks_dir: &str, max_heap_size: Option<usize>, timeout_ms: Option<u64>, allowed_origins: Vec<String>) -> Result<()> {
     let config = SandboxConfig {
         chunks_dir: chunks_dir.to_string(),
         max_heap_size: max_heap_size.or(Some(64 * 1024 * 1024)),
         timeout_ms: timeout_ms.or(Some(30_000)),
+        allowed_origins,
     };
 
     // Create runtime ONCE at startup (V8 cold start happens here)
@@ -242,6 +259,8 @@ async fn main() -> Result<()> {
     // Convert 0 to None (unlimited)
     let timeout_ms = timeout_ms.and_then(|t| if t == 0 { None } else { Some(t) });
 
+    let allowed_origins = parse_allowed_origins(&args);
+
     // Filter out options to get positional args
     let args = filter_options(&args);
 
@@ -256,7 +275,7 @@ async fn main() -> Result<()> {
             print_usage();
             return Err(anyhow!("Server mode requires chunks-dir argument"));
         }
-        return run_server(&args[2], max_heap_size, timeout_ms).await;
+        return run_server(&args[2], max_heap_size, timeout_ms, allowed_origins).await;
     }
 
     // Single-shot mode
@@ -269,5 +288,5 @@ async fn main() -> Result<()> {
     let entry_point = &args[2];
     let props_json = args.get(3).map(|s| s.as_str());
 
-    run_single_shot(chunks_dir, entry_point, props_json, max_heap_size, timeout_ms).await
+    run_single_shot(chunks_dir, entry_point, props_json, max_heap_size, timeout_ms, allowed_origins).await
 }

@@ -13,17 +13,25 @@ In other words, the idea is to run frontend JS code run without giving any poten
 
 Server mode achieves **~30x speedup** by reusing the V8 isolate and caching render functions.
 
-## Quick Start
+# Usage
 
-```bash
-# Build
-cargo build --release
+Download the binaries and check the integration example in examples directory
 
-# Single-shot mode
-./target/release/ssr-sandbox ./dist/chunks ./dist/chunks/entry.js '{"page":"home"}'
+### JS Entry Point Format
 
-# Server mode (persistent process)
-./target/release/ssr-sandbox --server ./dist/chunks
+Your entry module should export a render function:
+
+```javascript
+// entry.js
+export default async function render(props) {
+  // Dynamic imports work (within sandbox)
+  const { Header } = await import('./components/header.js');
+
+  return `<!DOCTYPE html>
+    <html>
+      <body>${Header(props)}</body>
+    </html>`;
+}
 ```
 
 ## Design Considerations
@@ -70,25 +78,6 @@ The sandbox provides these standard Web APIs for SSR compatibility:
 | `setTimeout/setInterval` | Stubbed (no-op) |
 | `requestAnimationFrame` | Stubbed (no-op) |
 | `queueMicrotask` | ✓ V8 built-in |
-
-## Usage
-
-### Entry Point Format
-
-Your entry module should export a render function:
-
-```javascript
-// entry.js
-export default async function render(props) {
-  // Dynamic imports work (within sandbox)
-  const { Header } = await import('./components/header.js');
-
-  return `<!DOCTYPE html>
-    <html>
-      <body>${Header(props)}</body>
-    </html>`;
-}
-```
 
 ### CLI Options
 
@@ -160,34 +149,31 @@ cargo build --release --target aarch64-unknown-linux-gnu
 cargo build --release --target x86_64-unknown-linux-gnu
 ```
 
-## Docker
+## Docker (for local testing)
 
-### Distroless (minimal)
+The Dockerfile is provided for local testing in a Linux environment. For production, download prebuilt binaries from GitHub Releases.
 
 ```bash
 docker build -t ssr-sandbox:latest .
-```
-
-### Amazon Linux (for Lambda/EC2)
-
-```bash
-docker build -f Dockerfile.amazonlinux -t ssr-sandbox:al2023 .
+docker run --rm -v ./dist:/app/chunks:ro ssr-sandbox /app/chunks /app/chunks/entry.js '{}'
 ```
 
 ## Development
 
 ### Requirements
 
-- Rust 1.80+ (see `rust-version` in Cargo.toml)
-- `Cargo.lock` is committed for reproducible builds
+Rust version: See `rust-version` in Cargo.toml
 
-### Dependency versioning
+```bash
+# Build
+cargo build --release
 
-Dependencies use tilde requirements (`~x.y`) to allow only patch updates:
-- `~0.311` means `>=0.311.0, <0.312.0`
-- `~1.0` means `>=1.0.0, <1.1.0`
+# Single-shot mode
+./target/release/ssr-sandbox ./dist/chunks ./dist/chunks/entry.js '{"page":"home"}'
 
-This prevents unexpected breaking changes from minor version bumps while still allowing security patches via `cargo update`.
+# Server mode (persistent process)
+./target/release/ssr-sandbox --server ./dist/chunks
+```
 
 ### Security updates
 

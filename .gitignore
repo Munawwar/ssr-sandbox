@@ -9,3 +9,4 @@ example-dist/
 
 # OS
 .DS_Store
+dist/

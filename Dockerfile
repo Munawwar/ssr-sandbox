@@ -1,8 +1,11 @@
-# Multi-stage build for minimal production image
-# Supports both x86_64 and aarch64
+# Dockerfile for local testing in a Linux environment
+# Not needed for distribution - binaries are published to GitHub Releases
+#
+# Build: docker build -t ssr-sandbox .
+# Test:  docker run --rm -v ./dist:/app/chunks:ro ssr-sandbox /app/chunks /app/chunks/entry.js '{}'
 
 # Stage 1: Build
-FROM rust:1.83-bookworm AS builder
+FROM rust:bookworm AS builder
 
 WORKDIR /build
 
@@ -21,7 +24,9 @@ RUN mkdir src && \
     echo "pub fn dummy() {}" > src/lib.rs
 
 # Build dependencies (cached layer)
-RUN cargo build --release && rm -rf src target/release/ssr-sandbox*
+# Remove the dummy binary AND its fingerprint so cargo rebuilds with real source
+RUN cargo build --release && \
+    rm -rf src target/release/ssr-sandbox* target/release/.fingerprint/ssr-sandbox-*
 
 # Copy actual source
 COPY src src

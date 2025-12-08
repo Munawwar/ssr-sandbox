@@ -140,7 +140,7 @@ deno_core::extension!(
 pub struct SandboxConfig {
     /// Directory containing the JS chunks (only this dir is accessible)
     pub chunks_dir: String,
-    /// Maximum heap size in bytes (default: 64MB)
+    /// Maximum heap size in bytes (default: 64MB, None = unlimited)
     pub max_heap_size: Option<usize>,
 }
 
@@ -148,7 +148,7 @@ impl Default for SandboxConfig {
     fn default() -> Self {
         Self {
             chunks_dir: String::from("./chunks"),
-            max_heap_size: Some(64 * 1024 * 1024), // 64MB
+            max_heap_size: Some(64 * 1024 * 1024), // 64MB default
         }
     }
 }
@@ -157,11 +157,31 @@ impl Default for SandboxConfig {
 pub fn create_runtime(config: &SandboxConfig) -> Result<JsRuntime, Error> {
     let loader = SandboxedLoader::new(&config.chunks_dir)?;
 
+    // Configure V8 heap limits if specified
+    let create_params = config.max_heap_size.map(|max_bytes| {
+        deno_core::v8::Isolate::create_params().heap_limits(0, max_bytes)
+    });
+
     let mut runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(loader)),
         extensions: vec![ssr_runtime::init_ops_and_esm()],
+        create_params,
         ..Default::default()
     });
+
+    // Add near-heap-limit callback to gracefully handle OOM
+    if config.max_heap_size.is_some() {
+        runtime.add_near_heap_limit_callback(|current, initial| {
+            // Don't increase the limit - let V8 terminate gracefully
+            // Return current limit to trigger OOM error instead of crash
+            eprintln!(
+                "[ssr-sandbox] Near heap limit: current={}MB, initial={}MB",
+                current / (1024 * 1024),
+                initial / (1024 * 1024)
+            );
+            current
+        });
+    }
 
     // Initialize console output capture in state
     runtime.op_state().borrow_mut().put(ConsoleOutput::default());

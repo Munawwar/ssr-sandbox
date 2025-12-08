@@ -9,6 +9,7 @@ A secure, high-performance server-side rendering runtime using `deno_core`. Desi
 - **Code splitting support** - Works with esbuild chunked bundles
 - **Dynamic imports** - Sandboxed to allowed directory only
 - **Server mode** - Persistent process for high-throughput SSR
+- **Memory limits** - Configurable V8 heap size to prevent OOM crashes
 
 ## Quick Start
 
@@ -35,6 +36,7 @@ cargo build --release
 | Path traversal (`../../../etc/passwd`) | Blocked |
 | Remote imports (`https://evil.com/x.js`) | Blocked |
 | Tampering with internal render cache | Blocked |
+| Memory exhaustion (OOM) | Limited (64MB default) |
 
 ## Available Web APIs
 
@@ -56,15 +58,24 @@ The sandbox provides these standard Web APIs for SSR compatibility:
 
 ## Usage
 
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--max-heap-size <MB>` | Maximum V8 heap size in megabytes (default: 64). Use 0 for unlimited (not recommended). |
+
 ### Single-Shot Mode
 
 For one-off renders or testing:
 
 ```bash
-./target/release/ssr-sandbox <chunks-dir> <entry-point> [props-json]
+./target/release/ssr-sandbox [options] <chunks-dir> <entry-point> [props-json]
 
 # Example
 ./target/release/ssr-sandbox ./dist ./dist/entry.js '{"page":"home","user":"Alice"}'
+
+# With custom heap limit
+./target/release/ssr-sandbox --max-heap-size 256 ./dist ./dist/entry.js '{"page":"home"}'
 ```
 
 ### "Server" Mode (via child process stdin/stdout)
@@ -72,7 +83,10 @@ For one-off renders or testing:
 For production use - keeps V8 warm for fast subsequent renders:
 
 ```bash
-./target/release/ssr-sandbox --server <chunks-dir>
+./target/release/ssr-sandbox --server [options] <chunks-dir>
+
+# With custom heap limit
+./target/release/ssr-sandbox --max-heap-size 256 --server ./dist/chunks
 ```
 
 Protocol (stdin/stdout):

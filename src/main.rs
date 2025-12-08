@@ -32,18 +32,53 @@ fn print_usage() {
     eprintln!("SSR Sandbox - Secure server-side rendering runtime");
     eprintln!();
     eprintln!("Single-shot mode:");
-    eprintln!("  ssr-sandbox <chunks-dir> <entry-point> [props-json]");
+    eprintln!("  ssr-sandbox [options] <chunks-dir> <entry-point> [props-json]");
     eprintln!();
     eprintln!("Server mode (persistent process):");
-    eprintln!("  ssr-sandbox --server <chunks-dir>");
+    eprintln!("  ssr-sandbox --server [options] <chunks-dir>");
+    eprintln!();
+    eprintln!("Options:");
+    eprintln!("  --max-heap-size <MB>  Maximum V8 heap size in megabytes (default: 64)");
+    eprintln!("                        Use 0 for unlimited (not recommended)");
     eprintln!();
     eprintln!("Examples:");
     eprintln!("  ssr-sandbox ./dist/chunks ./dist/chunks/entry.js '{{\"page\":\"home\"}}'");
     eprintln!("  ssr-sandbox --server ./dist/chunks");
+    eprintln!("  ssr-sandbox --max-heap-size 256 --server ./dist/chunks");
+}
+
+fn parse_heap_size(args: &[String]) -> Option<usize> {
+    for i in 0..args.len() {
+        if args[i] == "--max-heap-size" {
+            if let Some(size_str) = args.get(i + 1) {
+                if let Ok(mb) = size_str.parse::<usize>() {
+                    return Some(if mb == 0 { 0 } else { mb * 1024 * 1024 });
+                }
+            }
+        }
+    }
+    None
+}
+
+fn filter_options(args: &[String]) -> Vec<String> {
+    let mut result = vec![args[0].clone()];
+    let mut skip_next = false;
+    for arg in args.iter().skip(1) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == "--max-heap-size" {
+            skip_next = true;
+            continue;
+        }
+        result.push(arg.clone());
+    }
+    result
 }
 
 /// Run in single-shot mode (original behavior)
-async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option<&str>) -> Result<()> {
+async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option<&str>, max_heap_size: Option<usize>) -> Result<()> {
     let props: serde_json::Value = match props_json {
         Some(json) => serde_json::from_str(json).map_err(|e| anyhow!("Invalid props JSON: {}", e))?,
         None => serde_json::json!({}),
@@ -51,7 +86,7 @@ async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option
 
     let config = SandboxConfig {
         chunks_dir: chunks_dir.to_string(),
-        ..Default::default()
+        max_heap_size: max_heap_size.or(Some(64 * 1024 * 1024)),
     };
 
     let mut runtime = create_runtime(&config)?;
@@ -75,10 +110,10 @@ async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option
 }
 
 /// Run in server mode (persistent process, reads requests from stdin)
-async fn run_server(chunks_dir: &str) -> Result<()> {
+async fn run_server(chunks_dir: &str, max_heap_size: Option<usize>) -> Result<()> {
     let config = SandboxConfig {
         chunks_dir: chunks_dir.to_string(),
-        ..Default::default()
+        max_heap_size: max_heap_size.or(Some(64 * 1024 * 1024)),
     };
 
     // Create runtime ONCE at startup (V8 cold start happens here)
@@ -172,6 +207,14 @@ fn write_response(stdout: &mut std::io::Stdout, ok: bool, body: &str) -> Result<
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
+    // Parse options before filtering
+    let max_heap_size = parse_heap_size(&args);
+    // Convert 0 to None (unlimited)
+    let max_heap_size = max_heap_size.and_then(|s| if s == 0 { None } else { Some(s) });
+
+    // Filter out options to get positional args
+    let args = filter_options(&args);
+
     if args.len() < 2 {
         print_usage();
         return Err(anyhow!("Missing required arguments"));
@@ -183,7 +226,7 @@ async fn main() -> Result<()> {
             print_usage();
             return Err(anyhow!("Server mode requires chunks-dir argument"));
         }
-        return run_server(&args[2]).await;
+        return run_server(&args[2], max_heap_size).await;
     }
 
     // Single-shot mode
@@ -196,5 +239,5 @@ async fn main() -> Result<()> {
     let entry_point = &args[2];
     let props_json = args.get(3).map(|s| s.as_str());
 
-    run_single_shot(chunks_dir, entry_point, props_json).await
+    run_single_shot(chunks_dir, entry_point, props_json, max_heap_size).await
 }

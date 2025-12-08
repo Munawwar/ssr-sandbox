@@ -1,8 +1,6 @@
 # SSR Sandbox
 
-The goal is to contain security exploits / supply chain attacks in frontend JavaScript SSR (server side rendering) code from ever getting access to server resources. Sandbox implemented with `deno_core`. Interestingly this may also allow other programming languages to do JS SSR without using full node.js / deno.
-
-In other words, the idea is to run frontend JS code run without giving any potential attacker access to environment variables, filesystem APIs or network access.
+The goal is to contain security exploits / supply chain attacks in frontend JavaScript SSR (server side rendering) code from ever getting access to server resources (filesystem, env vars, network etc). Sandbox implemented with `deno_core`. Interestingly this may also allow other programming languages to do JS SSR without using full node.js / deno.
 
 ## Performance of example SSR JS bundle
 
@@ -10,8 +8,6 @@ In other words, the idea is to run frontend JS code run without giving any poten
 |--------|-------------|---------------------|--------------------------|
 | Render time | ~11ms | ~8ms | **~0.2ms** |
 | Peak RAM | ~22 MB | ~22 MB | ~22 MB |
-
-Server mode achieves **~30x speedup** by reusing the V8 isolate and caching render functions.
 
 # Usage
 

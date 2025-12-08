@@ -15,7 +15,7 @@ Server mode achieves **~30x speedup** by reusing the V8 isolate and caching rend
 
 # Usage
 
-Download the binaries and check the integration example in examples directory
+Download the binary and check the integration example in examples directory
 
 ### JS Entry Point Format
 
@@ -79,6 +79,8 @@ The sandbox provides these standard Web APIs for SSR compatibility:
 | `requestAnimationFrame` | Stubbed (no-op) |
 | `queueMicrotask` | ✓ V8 built-in |
 
+## Binary Usage
+
 ### CLI Options
 
 | Option | Description |
@@ -87,7 +89,7 @@ The sandbox provides these standard Web APIs for SSR compatibility:
 | `--timeout <ms>` | Maximum render time in milliseconds (default: 30000). Use 0 for unlimited (not recommended). |
 | `--allow-origin <url>` | Allow `fetch()` to this origin (can be specified multiple times). Example: `--allow-origin https://api.example.com` |
 
-**\* Timeout note:** When a render times out, the V8 isolate is terminated and recreated. This means the next request after a timeout will incur a cold start penalty (~10ms instead of ~0.2ms). Timeouts should be rare in production.
+**\* Timeout note:** When a render times out, the V8 isolate is terminated and recreated. This means the next request after a timeout will incur a cold start penalty (~10ms instead of ~0.2ms).
 
 ### "Server" Mode (via child process stdin/stdout)
 
@@ -136,6 +138,23 @@ See the [examples/](examples/) directory for client implementations:
 
 - **Python**: `examples/python_client.py` - Full client with timing benchmarks
 
+## Development
+
+### Requirements
+
+Rust version: See `rust-version` in Cargo.toml
+
+```bash
+# Build
+cargo build --release
+
+# Single-shot mode
+./target/release/ssr-sandbox ./dist/chunks ./dist/chunks/entry.js '{"page":"home"}'
+
+# Server mode (persistent process)
+./target/release/ssr-sandbox --server ./dist/chunks
+```
+
 ## Cross-Compilation
 
 ```bash
@@ -156,23 +175,6 @@ The Dockerfile is provided for local testing in a Linux environment. For product
 ```bash
 docker build -t ssr-sandbox:latest .
 docker run --rm -v ./dist:/app/chunks:ro ssr-sandbox /app/chunks /app/chunks/entry.js '{}'
-```
-
-## Development
-
-### Requirements
-
-Rust version: See `rust-version` in Cargo.toml
-
-```bash
-# Build
-cargo build --release
-
-# Single-shot mode
-./target/release/ssr-sandbox ./dist/chunks ./dist/chunks/entry.js '{"page":"home"}'
-
-# Server mode (persistent process)
-./target/release/ssr-sandbox --server ./dist/chunks
 ```
 
 ### Security updates

@@ -1,0 +1,11 @@
+# Build artifacts
+target/
+example-dist/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store

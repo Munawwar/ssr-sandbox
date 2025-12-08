@@ -1,0 +1,45 @@
+# Amazon Linux 2023 build - for Lambda and EC2 deployment
+# Supports both x86_64 and aarch64 (Graviton)
+
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023 AS builder
+
+# Install Rust and build tools
+RUN dnf install -y gcc gcc-c++ cmake rust cargo && \
+    dnf clean all
+
+WORKDIR /build
+
+# Copy manifests first for better caching
+COPY Cargo.toml Cargo.lock* ./
+COPY .cargo .cargo
+
+# Create dummy src to cache dependencies
+RUN mkdir src && \
+    echo "fn main() {}" > src/main.rs && \
+    echo "pub fn dummy() {}" > src/lib.rs
+
+# Build dependencies (cached layer)
+RUN cargo build --release && rm -rf src target/release/ssr-sandbox*
+
+# Copy actual source
+COPY src src
+
+# Build the real binary
+RUN cargo build --release
+
+# Stage 2: Minimal runtime
+FROM public.ecr.aws/amazonlinux/amazonlinux:2023-minimal
+
+# Copy only the binary (glibc is included in minimal image)
+COPY --from=builder /build/target/release/ssr-sandbox /usr/local/bin/ssr-sandbox
+
+WORKDIR /app
+
+# Create non-root user
+RUN microdnf install shadow-utils && \
+    useradd -r -s /bin/false sandbox && \
+    microdnf clean all
+
+USER sandbox
+
+ENTRYPOINT ["/usr/local/bin/ssr-sandbox"]

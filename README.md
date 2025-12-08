@@ -1,6 +1,6 @@
 # SSR Sandbox
 
-You don't want frontend code security exploits / supply chain attacks ever getting access to server resources. This project is aimed to sandbox JS server side rendering code using `deno_core`.
+The goal is to contain security exploits / supply chain attacks in frontend JavaScript SSR (server side rendering) code from ever getting access to server resources. Sandbox implemented with `deno_core`. Interestingly this may also allow other programming languages to do JS SSR without using full node.js / deno.
 
 In other words, the idea is to run frontend JS code run without giving any potential attacker access to environment variables, filesystem APIs or network access.
 
@@ -32,22 +32,24 @@ cargo build --release
 - ESM imports and dynamic imports are allowed within a filesystem directory. External origin imports are not allowed at the moment
 - We also have to make sure the JS code doesn't consume all the memory of the machine or go into infinite loop
 - fetch() isn't allowed at all at the moment. TODO: If we implement this we would have an allowlist of origins / URL prefixes.
-- Not all web APIs will be implemented
+- Not all web APIs will be implemented. We are keeping the scope limited to what's needed for a typical SSR bundle.
 
-## Security Guarantees
+## Security
 
-| Attack Vector | Status |
-|--------------|--------|
-| Filesystem access (`fs.readFile`, etc.) | Blocked |
-| Network access (`fetch`, `http`) | Blocked |
-| Environment variables (`process.env`) | Blocked |
-| Child processes (`child_process`) | Blocked |
-| Dynamic imports outside sandbox | Blocked |
-| Path traversal (`../../../etc/passwd`) | Blocked |
-| Remote imports (`https://evil.com/x.js`) | Blocked |
-| Tampering with internal render cache | Blocked |
-| Memory exhaustion (OOM) | Limited (64MB default) |
-| Infinite loops / slow code | Timeout (30s default)* |
+The sandbox blocks the following:
+
+- Filesystem access (`fs.readFile`, etc.)
+- Network access (`fetch`, `http`)
+- Environment variables (`process.env`)
+- Child processes (`child_process`)
+- Dynamic imports outside sandbox directory
+- Path traversal (`../../../etc/passwd`)
+- Remote imports (`https://evil.com/x.js`)
+- Tampering with internal render cache
+
+And limits resource usage by default:
+- Memory: 64MB heap (configurable via `--max-heap-size`)
+- Time: 30s render timeout (configurable via `--timeout`)*
 
 ## Available Web APIs
 

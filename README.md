@@ -1,15 +1,17 @@
 # SSR Sandbox
 
-A secure, high-performance server-side rendering runtime using `deno_core`. Designed to contain npm supply chain attacks by executing untrusted JavaScript in a sandboxed V8 isolate with **zero ambient capabilities**.
+You don't want frontend code security exploits / supply chain attacks ever getting access to server resources. This project is aimed to sandbox JS server side rendering code using `deno_core`.
 
-## Features
+In other words, the idea is to run frontend JS code run without giving any potential attacker access to environment variables, filesystem APIs or network access.
 
-- **Secure by default** - No filesystem, network, or environment access
-- **Fast** - Sub-millisecond renders after warmup (~0.1-0.2ms)
-- **Code splitting support** - Works with esbuild chunked bundles
-- **Dynamic imports** - Sandboxed to allowed directory only
-- **Server mode** - Persistent process for high-throughput SSR
-- **Memory limits** - Configurable V8 heap size to prevent OOM crashes
+## Performance of example SSR JS bundle
+
+| Metric | Single-shot | Server mode (first) | Server mode (subsequent) |
+|--------|-------------|---------------------|--------------------------|
+| Render time | ~11ms | ~8ms | **~0.2ms** |
+| Peak RAM | ~22 MB | ~22 MB | ~22 MB |
+
+Server mode achieves **~30x speedup** by reusing the V8 isolate and caching render functions.
 
 ## Quick Start
 
@@ -23,6 +25,14 @@ cargo build --release
 # Server mode (persistent process)
 ./target/release/ssr-sandbox --server ./dist/chunks
 ```
+
+## Design Considerations
+
+- We want to utilize JS engine JIT optimizations for performance, so trying to isolate requests from each other is a non-goal.
+- ESM imports and dynamic imports are allowed within a filesystem directory. External origin imports are not allowed at the moment
+- We also have to make sure the JS code doesn't consume all the memory of the machine or go into infinite loop
+- fetch() isn't allowed at all at the moment. TODO: If we implement this we would have an allowlist of origins / URL prefixes.
+- Not all web APIs will be implemented
 
 ## Security Guarantees
 
@@ -59,7 +69,24 @@ The sandbox provides these standard Web APIs for SSR compatibility:
 
 ## Usage
 
-### Options
+### Entry Point Format
+
+Your entry module should export a render function:
+
+```javascript
+// entry.js
+export default async function render(props) {
+  // Dynamic imports work (within sandbox)
+  const { Header } = await import('./components/header.js');
+
+  return `<!DOCTYPE html>
+    <html>
+      <body>${Header(props)}</body>
+    </html>`;
+}
+```
+
+### CLI Options
 
 | Option | Description |
 |--------|-------------|
@@ -67,20 +94,6 @@ The sandbox provides these standard Web APIs for SSR compatibility:
 | `--timeout <ms>` | Maximum render time in milliseconds (default: 30000). Use 0 for unlimited (not recommended). |
 
 **\* Timeout note:** When a render times out, the V8 isolate is terminated and recreated. This means the next request after a timeout will incur a cold start penalty (~10ms instead of ~0.2ms). Timeouts should be rare in production.
-
-### Single-Shot Mode
-
-For one-off renders or testing:
-
-```bash
-./target/release/ssr-sandbox [options] <chunks-dir> <entry-point> [props-json]
-
-# Example
-./target/release/ssr-sandbox ./dist ./dist/entry.js '{"page":"home","user":"Alice"}'
-
-# With custom heap limit
-./target/release/ssr-sandbox --max-heap-size 256 ./dist ./dist/entry.js '{"page":"home"}'
-```
 
 ### "Server" Mode (via child process stdin/stdout)
 
@@ -106,57 +119,25 @@ Length:1234
 <!DOCTYPE html>...
 ```
 
+### Single-Shot Mode (mostly for testing purpose)
+
+This is for testing purpose mainly and not really meant for production use. The example takes 6ms on my machine and that's not fast enough for production use.
+
+```bash
+./target/release/ssr-sandbox [options] <chunks-dir> <entry-point> [props-json]
+
+# Example
+./target/release/ssr-sandbox ./dist ./dist/entry.js '{"page":"home","user":"Alice"}'
+
+# With custom heap limit
+./target/release/ssr-sandbox --max-heap-size 256 ./dist ./dist/entry.js '{"page":"home"}'
+```
+
 ### Client Examples
 
 See the [examples/](examples/) directory for client implementations:
 
 - **Python**: `examples/python_client.py` - Full client with timing benchmarks
-
-## Building SSR Bundles
-
-Use the included build script with esbuild:
-
-```bash
-./build-ssr.sh
-```
-
-Or manually with esbuild:
-
-```bash
-esbuild src/entry-server.js \
-  --bundle \
-  --format=esm \
-  --splitting \
-  --outdir=dist/chunks \
-  --platform=neutral \
-  --target=es2023
-```
-
-### Entry Point Format
-
-Your entry module should export a render function:
-
-```javascript
-// entry.js
-export default async function render(props) {
-  // Dynamic imports work (within sandbox)
-  const { Header } = await import('./components/header.js');
-
-  return `<!DOCTYPE html>
-    <html>
-      <body>${Header(props)}</body>
-    </html>`;
-}
-```
-
-## Performance
-
-| Metric | Single-shot | Server mode (first) | Server mode (subsequent) |
-|--------|-------------|---------------------|--------------------------|
-| Render time | ~11ms | ~8ms | **~0.2ms** |
-| Peak RAM | ~22 MB | ~22 MB | ~22 MB |
-
-Server mode achieves **~30x speedup** by reusing the V8 isolate and caching render functions.
 
 ## Cross-Compilation
 
@@ -185,29 +166,3 @@ docker build -t ssr-sandbox:latest .
 docker build -f Dockerfile.amazonlinux -t ssr-sandbox:al2023 .
 ```
 
-## Architecture
-
-```
-┌─────────────────────────────────────────────────┐
-│                  Your Server                     │
-├─────────────────────────────────────────────────┤
-│  ┌───────────────────────────────────────────┐  │
-│  │           SSR Sandbox (Rust)              │  │
-│  │  ┌─────────────────────────────────────┐  │  │
-│  │  │         V8 Isolate                  │  │  │
-│  │  │  ┌───────────────────────────────┐  │  │  │
-│  │  │  │     Your JS Bundle            │  │  │  │
-│  │  │  │  (potentially compromised)    │  │  │  │
-│  │  │  └───────────────────────────────┘  │  │  │
-│  │  │                                     │  │  │
-│  │  │  No fs │ No net │ No env │ No exec  │  │  │
-│  │  └─────────────────────────────────────┘  │  │
-│  └───────────────────────────────────────────┘  │
-│                                                 │
-│  Full server capabilities (outside sandbox)     │
-└─────────────────────────────────────────────────┘
-```
-
-## License
-
-MIT

@@ -37,6 +37,7 @@ cargo build --release
 | Remote imports (`https://evil.com/x.js`) | Blocked |
 | Tampering with internal render cache | Blocked |
 | Memory exhaustion (OOM) | Limited (64MB default) |
+| Infinite loops / slow code | Timeout (30s default)* |
 
 ## Available Web APIs
 
@@ -63,6 +64,9 @@ The sandbox provides these standard Web APIs for SSR compatibility:
 | Option | Description |
 |--------|-------------|
 | `--max-heap-size <MB>` | Maximum V8 heap size in megabytes (default: 64). Use 0 for unlimited (not recommended). |
+| `--timeout <ms>` | Maximum render time in milliseconds (default: 30000). Use 0 for unlimited (not recommended). |
+
+**\* Timeout note:** When a render times out, the V8 isolate is terminated and recreated. This means the next request after a timeout will incur a cold start penalty (~10ms instead of ~0.2ms). Timeouts should be rare in production.
 
 ### Single-Shot Mode
 

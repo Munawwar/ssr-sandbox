@@ -142,6 +142,8 @@ pub struct SandboxConfig {
     pub chunks_dir: String,
     /// Maximum heap size in bytes (default: 64MB, None = unlimited)
     pub max_heap_size: Option<usize>,
+    /// Maximum time for a single render in milliseconds (default: 30000ms, None = unlimited)
+    pub timeout_ms: Option<u64>,
 }
 
 impl Default for SandboxConfig {
@@ -149,6 +151,7 @@ impl Default for SandboxConfig {
         Self {
             chunks_dir: String::from("./chunks"),
             max_heap_size: Some(64 * 1024 * 1024), // 64MB default
+            timeout_ms: Some(30_000), // 30 seconds default
         }
     }
 }
@@ -195,6 +198,7 @@ pub fn create_runtime(config: &SandboxConfig) -> Result<JsRuntime, Error> {
 /// * `runtime` - The sandboxed runtime
 /// * `entry_point` - Path to the entry JS file (must be within chunks_dir)
 /// * `props` - JSON props to pass to the render function
+/// * `timeout_ms` - Optional timeout in milliseconds (None = no timeout)
 ///
 /// # Expected JS module format
 /// The entry module should export a default function or a `render` function:
@@ -208,6 +212,49 @@ pub fn create_runtime(config: &SandboxConfig) -> Result<JsRuntime, Error> {
 /// }
 /// ```
 pub async fn execute_ssr(
+    runtime: &mut JsRuntime,
+    entry_point: &Path,
+    props: serde_json::Value,
+    timeout_ms: Option<u64>,
+) -> Result<SsrResult, Error> {
+    match timeout_ms {
+        Some(ms) => {
+            // Get a handle to terminate execution if needed
+            let isolate_handle = runtime.v8_isolate().thread_safe_handle();
+
+            // Spawn a task that will terminate execution after timeout
+            let timeout_handle = tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                isolate_handle.terminate_execution();
+            });
+
+            let result = execute_ssr_inner(runtime, entry_point, props).await;
+
+            // Cancel the timeout task if we finished in time
+            timeout_handle.abort();
+
+            // Check if we were terminated due to timeout
+            // V8 termination can manifest as various errors
+            match &result {
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if err_str.contains("terminated")
+                        || err_str.contains("unresolved promise")
+                        || err_str.contains("Uncaught Error: execution terminated")
+                    {
+                        Err(anyhow!("Render timed out after {}ms", ms))
+                    } else {
+                        result
+                    }
+                }
+                _ => result,
+            }
+        }
+        None => execute_ssr_inner(runtime, entry_point, props).await,
+    }
+}
+
+async fn execute_ssr_inner(
     runtime: &mut JsRuntime,
     entry_point: &Path,
     props: serde_json::Value,

@@ -27,12 +27,6 @@ jobs:
             artifact: ssr-sandbox-linux-aarch64
             cross: true
 
-          # macOS x86_64 (Intel)
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact: ssr-sandbox-darwin-x86_64
-            cross: false
-
           # macOS aarch64 (Apple Silicon)
           - os: macos-14
             target: aarch64-apple-darwin
@@ -56,15 +50,6 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Configure cross-compilation (Linux aarch64)
-        if: matrix.cross
-        run: |
-          mkdir -p .cargo
-          cat >> .cargo/config.toml << 'EOF'
-          [target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"
-          EOF
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}

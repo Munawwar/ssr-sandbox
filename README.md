@@ -174,3 +174,28 @@ docker build -t ssr-sandbox:latest .
 docker build -f Dockerfile.amazonlinux -t ssr-sandbox:al2023 .
 ```
 
+## Development
+
+### Requirements
+
+- Rust 1.80+ (see `rust-version` in Cargo.toml)
+- `Cargo.lock` is committed for reproducible builds
+
+### Dependency versioning
+
+Dependencies use tilde requirements (`~x.y`) to allow only patch updates:
+- `~0.311` means `>=0.311.0, <0.312.0`
+- `~1.0` means `>=1.0.0, <1.1.0`
+
+This prevents unexpected breaking changes from minor version bumps while still allowing security patches via `cargo update`.
+
+### Security updates
+
+```bash
+cargo update        # Update dependencies within version constraints
+cargo build --release
+cargo test          # Verify nothing broke
+```
+
+For major dependency upgrades, manually update version numbers in `Cargo.toml` and test thoroughly.
+

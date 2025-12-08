@@ -3,6 +3,7 @@ name = "ssr-sandbox"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.80"
+license = "MIT"
 description = "Sandboxed SSR runtime using deno_core - no fs/net/env access"
 
 [dependencies]

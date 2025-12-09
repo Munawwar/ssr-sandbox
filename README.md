@@ -6,7 +6,7 @@ The goal is to contain security exploits / supply chain attacks in frontend Java
 
 | Metric | Single-shot | Server mode (first) | Server mode (subsequent) |
 |--------|-------------|---------------------|--------------------------|
-| Render time | ~11ms | ~8ms | **~0.2ms** |
+| Render time | 10-12ms | 10-12ms | **<0.1ms** |
 | Peak RAM | ~22 MB | ~22 MB | ~22 MB |
 
 # Usage
@@ -116,7 +116,7 @@ Length:1234
 
 ### Single-Shot Mode (mostly for testing purpose)
 
-This is for testing purpose mainly and not really meant for production use. The example takes 11ms on my machine and that's not fast enough for production use.
+This is for testing purpose mainly and not really meant for production use. The example takes 10-12ms on my machine and that's not fast enough for production use.
 
 ```bash
 ./target/release/ssr-sandbox [options] <chunks-dir> <entry-point> [props-json]

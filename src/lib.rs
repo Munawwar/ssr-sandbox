@@ -34,12 +34,12 @@
 //! }
 //! ```
 
-mod fetch;
 mod loader;
+pub mod ops;
 mod runtime;
 mod sanitize;
 
-pub use fetch::FetchConfig;
 pub use loader::SandboxedLoader;
-pub use runtime::{create_runtime, execute_ssr, ConsoleOutput, SandboxConfig, SsrResult};
+pub use ops::{ConsoleOutput, FetchConfig};
+pub use runtime::{create_runtime, execute_ssr, SandboxConfig, SsrResult};
 pub use sanitize::sanitize_props;

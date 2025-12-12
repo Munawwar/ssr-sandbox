@@ -9,20 +9,16 @@
 //! - Module loading from allowed directory only
 //! - No fs, net, env, or other system access
 
-use crate::fetch::{op_fetch, FetchConfig};
 use crate::loader::SandboxedLoader;
+use crate::ops::{ssr_runtime, ConsoleOutput, FetchConfig};
 use anyhow::{anyhow, Error};
-use deno_core::{op2, JsRuntime, ModuleSpecifier, OpState, PollEventLoopOptions, RuntimeOptions};
+use deno_core::{JsRuntime, ModuleSpecifier, PollEventLoopOptions, RuntimeOptions};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
-/// Captured console output from the sandboxed runtime
-#[derive(Debug, Default, Clone)]
-pub struct ConsoleOutput {
-    pub logs: Vec<String>,
-    pub warns: Vec<String>,
-    pub errors: Vec<String>,
-}
+/// V8 snapshot created at build time (contains pre-compiled extension JS)
+static RUNTIME_SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/SSR_SNAPSHOT.bin"));
 
 /// Result of an SSR render
 #[derive(Debug)]
@@ -30,113 +26,6 @@ pub struct SsrResult {
     pub html: String,
     pub console: ConsoleOutput,
 }
-
-// ============================================================================
-// Console Ops
-// ============================================================================
-
-#[op2(fast)]
-fn op_console_log(state: &mut OpState, #[string] msg: &str) {
-    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
-        output.logs.push(msg.to_string());
-    }
-}
-
-#[op2(fast)]
-fn op_console_warn(state: &mut OpState, #[string] msg: &str) {
-    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
-        output.warns.push(msg.to_string());
-    }
-}
-
-#[op2(fast)]
-fn op_console_error(state: &mut OpState, #[string] msg: &str) {
-    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
-        output.errors.push(msg.to_string());
-    }
-}
-
-// ============================================================================
-// Crypto Ops
-// ============================================================================
-
-#[op2]
-#[string]
-fn op_crypto_random_uuid() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
-#[op2(fast)]
-fn op_crypto_get_random_values(#[buffer] buf: &mut [u8]) {
-    use rand::RngCore;
-    rand::thread_rng().fill_bytes(buf);
-}
-
-#[op2]
-#[buffer]
-fn op_crypto_subtle_digest(#[string] algorithm: &str, #[buffer] data: &[u8]) -> Result<Vec<u8>, Error> {
-    use sha2::{Sha256, Sha384, Sha512, Digest};
-
-    let result = match algorithm.to_uppercase().replace("-", "").as_str() {
-        "SHA256" => {
-            let mut hasher = Sha256::new();
-            hasher.update(data);
-            hasher.finalize().to_vec()
-        }
-        "SHA384" => {
-            let mut hasher = Sha384::new();
-            hasher.update(data);
-            hasher.finalize().to_vec()
-        }
-        "SHA512" => {
-            let mut hasher = Sha512::new();
-            hasher.update(data);
-            hasher.finalize().to_vec()
-        }
-        _ => return Err(anyhow!("Unsupported algorithm: {}. Supported: SHA-256, SHA-384, SHA-512", algorithm)),
-    };
-
-    Ok(result)
-}
-
-// ============================================================================
-// Encoding Ops
-// ============================================================================
-
-#[op2]
-#[string]
-fn op_btoa(#[string] data: &str) -> Result<String, Error> {
-    use base64::Engine;
-    // btoa expects Latin-1, but we'll be lenient and accept UTF-8
-    Ok(base64::engine::general_purpose::STANDARD.encode(data.as_bytes()))
-}
-
-#[op2]
-#[string]
-fn op_atob(#[string] data: &str) -> Result<String, Error> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .map_err(|e| anyhow!("Invalid base64: {}", e))?;
-    String::from_utf8(bytes).map_err(|e| anyhow!("Invalid UTF-8 in decoded data: {}", e))
-}
-
-deno_core::extension!(
-    ssr_runtime,
-    ops = [
-        op_console_log,
-        op_console_warn,
-        op_console_error,
-        op_crypto_random_uuid,
-        op_crypto_get_random_values,
-        op_crypto_subtle_digest,
-        op_btoa,
-        op_atob,
-        op_fetch,
-    ],
-    esm_entry_point = "ext:ssr_runtime/bootstrap.js",
-    esm = ["ext:ssr_runtime/bootstrap.js" = "src/bootstrap.js"],
-);
 
 /// Configuration for the SSR sandbox
 pub struct SandboxConfig {
@@ -170,9 +59,28 @@ pub fn create_runtime(config: &SandboxConfig) -> Result<JsRuntime, Error> {
         deno_core::v8::Isolate::create_params().heap_limits(0, max_bytes)
     });
 
+    // Create blob store for deno_web (required for Blob API)
+    let blob_store = Arc::new(deno_web::BlobStore::default());
+
     let mut runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(loader)),
-        extensions: vec![ssr_runtime::init_ops_and_esm()],
+        // Use pre-built snapshot for fast startup (JS already parsed/compiled)
+        startup_snapshot: Some(RUNTIME_SNAPSHOT),
+        // Skip op JS binding registration - they're already in the snapshot
+        // But we still need to register ops for external references to match
+        skip_op_registration: true,
+        extensions: vec![
+            deno_webidl::deno_webidl::init_ops(),
+            deno_console::deno_console::init_ops(),
+            deno_url::deno_url::init_ops(),
+            deno_web::deno_web::init_ops::<deno_permissions::PermissionsContainer>(
+                blob_store,
+                None,
+            ),
+            deno_crypto::deno_crypto::init_ops(None),
+            // Our custom extension
+            ssr_runtime::init_ops(),
+        ],
         create_params,
         ..Default::default()
     });

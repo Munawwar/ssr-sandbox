@@ -24,7 +24,7 @@
 //!     Render function threw: undefined is not...
 
 use anyhow::{anyhow, Result};
-use ssr_sandbox::{create_runtime, execute_ssr, SandboxConfig};
+use ssr_sandbox::{create_runtime, execute_ssr, sanitize_props, SandboxConfig};
 use std::io::{BufRead, Write};
 use std::path::Path;
 
@@ -40,7 +40,7 @@ fn print_usage() {
     eprintln!("Options:");
     eprintln!("  --max-heap-size <MB>  Maximum V8 heap size in megabytes (default: 64)");
     eprintln!("                        Use 0 for unlimited (not recommended)");
-    eprintln!("  --timeout <ms>        Maximum render time in milliseconds (default: 30000)");
+    eprintln!("  --timeout <ms>        Maximum render time in milliseconds (default: 5000)");
     eprintln!("                        Use 0 for unlimited (not recommended)");
     eprintln!("  --allow-origin <url>  Allow fetch() to this origin (can be specified multiple times)");
     eprintln!("                        Example: --allow-origin https://api.example.com");
@@ -114,10 +114,13 @@ async fn run_single_shot(chunks_dir: &str, entry_point: &str, props_json: Option
         None => serde_json::json!({}),
     };
 
+    // Sanitize props to prevent prototype pollution
+    let props = sanitize_props(props)?;
+
     let config = SandboxConfig {
         chunks_dir: chunks_dir.to_string(),
         max_heap_size: max_heap_size.or(Some(64 * 1024 * 1024)),
-        timeout_ms: timeout_ms.or(Some(30_000)),
+        timeout_ms: timeout_ms.or(Some(5_000)),
         allowed_origins,
     };
 
@@ -146,7 +149,7 @@ async fn run_server(chunks_dir: &str, max_heap_size: Option<usize>, timeout_ms: 
     let config = SandboxConfig {
         chunks_dir: chunks_dir.to_string(),
         max_heap_size: max_heap_size.or(Some(64 * 1024 * 1024)),
-        timeout_ms: timeout_ms.or(Some(30_000)),
+        timeout_ms: timeout_ms.or(Some(5_000)),
         allowed_origins,
     };
 
@@ -188,6 +191,15 @@ async fn run_server(chunks_dir: &str, max_heap_size: Option<usize>, timeout_ms: 
                     write_response(&mut stdout, false, &error_msg)?;
                     continue;
                 }
+            }
+        };
+
+        // Sanitize props to prevent prototype pollution
+        let props = match sanitize_props(props) {
+            Ok(p) => p,
+            Err(e) => {
+                write_response(&mut stdout, false, &e.to_string())?;
+                continue;
             }
         };
 

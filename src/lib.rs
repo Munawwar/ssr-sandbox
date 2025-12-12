@@ -37,7 +37,9 @@
 mod fetch;
 mod loader;
 mod runtime;
+mod sanitize;
 
 pub use fetch::FetchConfig;
 pub use loader::SandboxedLoader;
 pub use runtime::{create_runtime, execute_ssr, ConsoleOutput, SandboxConfig, SsrResult};
+pub use sanitize::sanitize_props;

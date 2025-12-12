@@ -9,21 +9,16 @@
 //! - Module loading from allowed directory only
 //! - No fs, net, env, or other system access
 
-use crate::fetch::{op_fetch, FetchConfig};
 use crate::loader::SandboxedLoader;
+use crate::ops::{ssr_runtime, ConsoleOutput, FetchConfig};
 use anyhow::{anyhow, Error};
-use deno_core::{op2, JsRuntime, ModuleSpecifier, OpState, PollEventLoopOptions, RuntimeOptions};
+use deno_core::{JsRuntime, ModuleSpecifier, PollEventLoopOptions, RuntimeOptions};
 use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// Captured console output from the sandboxed runtime
-#[derive(Debug, Default, Clone)]
-pub struct ConsoleOutput {
-    pub logs: Vec<String>,
-    pub warns: Vec<String>,
-    pub errors: Vec<String>,
-}
+/// V8 snapshot created at build time (contains pre-compiled extension JS)
+static RUNTIME_SNAPSHOT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/SSR_SNAPSHOT.bin"));
 
 /// Result of an SSR render
 #[derive(Debug)]
@@ -31,45 +26,6 @@ pub struct SsrResult {
     pub html: String,
     pub console: ConsoleOutput,
 }
-
-// ============================================================================
-// Console Ops
-// ============================================================================
-
-#[op2(fast)]
-fn op_console_log(state: &mut OpState, #[string] msg: &str) {
-    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
-        output.logs.push(msg.to_string());
-    }
-}
-
-#[op2(fast)]
-fn op_console_warn(state: &mut OpState, #[string] msg: &str) {
-    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
-        output.warns.push(msg.to_string());
-    }
-}
-
-#[op2(fast)]
-fn op_console_error(state: &mut OpState, #[string] msg: &str) {
-    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
-        output.errors.push(msg.to_string());
-    }
-}
-
-// Our extension only needs console capture and fetch
-// crypto, atob, btoa, URL, TextEncoder etc. are provided by deno extensions
-deno_core::extension!(
-    ssr_runtime,
-    ops = [
-        op_console_log,
-        op_console_warn,
-        op_console_error,
-        op_fetch,
-    ],
-    esm_entry_point = "ext:ssr_runtime/bootstrap.js",
-    esm = ["ext:ssr_runtime/bootstrap.js" = "src/bootstrap.js"],
-);
 
 /// Configuration for the SSR sandbox
 pub struct SandboxConfig {
@@ -108,18 +64,22 @@ pub fn create_runtime(config: &SandboxConfig) -> Result<JsRuntime, Error> {
 
     let mut runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(loader)),
+        // Use pre-built snapshot for fast startup (JS already parsed/compiled)
+        startup_snapshot: Some(RUNTIME_SNAPSHOT),
+        // Skip op JS binding registration - they're already in the snapshot
+        // But we still need to register ops for external references to match
+        skip_op_registration: true,
         extensions: vec![
-            // Deno extensions (order matters - dependencies first)
-            deno_webidl::deno_webidl::init_ops_and_esm(),
-            deno_console::deno_console::init_ops_and_esm(),
-            deno_url::deno_url::init_ops_and_esm(),
-            deno_web::deno_web::init_ops_and_esm::<deno_permissions::PermissionsContainer>(
+            deno_webidl::deno_webidl::init_ops(),
+            deno_console::deno_console::init_ops(),
+            deno_url::deno_url::init_ops(),
+            deno_web::deno_web::init_ops::<deno_permissions::PermissionsContainer>(
                 blob_store,
-                None, // No location URL needed for SSR
+                None,
             ),
-            deno_crypto::deno_crypto::init_ops_and_esm(None), // No seed
-            // Our custom extension (fetch, console capture)
-            ssr_runtime::init_ops_and_esm(),
+            deno_crypto::deno_crypto::init_ops(None),
+            // Our custom extension
+            ssr_runtime::init_ops(),
         ],
         create_params,
         ..Default::default()

@@ -1,37 +1,64 @@
-//! Sandboxed fetch implementation with origin allowlist.
+//! Shared ops module - used by both build.rs (snapshot) and runtime.rs
 //!
-//! Security model:
-//! - Only URLs matching allowed origins can be fetched
-//! - Redirects only followed if they stay within the same origin
-//! - Integrates with the overall render timeout
+//! This module contains all custom ops and the extension! macro definition.
+//! It must be importable by both the main crate and the build script.
 
-use anyhow::anyhow;
 use deno_core::{op2, OpState};
-use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
-use url::Url;
+
+// ============================================================================
+// Console Output Capture
+// ============================================================================
+
+/// Captured console output from the sandboxed runtime
+#[derive(Debug, Default, Clone)]
+pub struct ConsoleOutput {
+    pub logs: Vec<String>,
+    pub warns: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+#[op2(fast)]
+pub fn op_console_log(state: &mut OpState, #[string] msg: &str) {
+    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
+        output.logs.push(msg.to_string());
+    }
+}
+
+#[op2(fast)]
+pub fn op_console_warn(state: &mut OpState, #[string] msg: &str) {
+    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
+        output.warns.push(msg.to_string());
+    }
+}
+
+#[op2(fast)]
+pub fn op_console_error(state: &mut OpState, #[string] msg: &str) {
+    if let Some(output) = state.try_borrow_mut::<ConsoleOutput>() {
+        output.errors.push(msg.to_string());
+    }
+}
+
+// ============================================================================
+// Fetch API
+// ============================================================================
 
 /// Configuration for fetch allowlist
 #[derive(Debug, Clone, Default)]
 pub struct FetchConfig {
-    /// Allowed origins (e.g., "https://api.example.com")
-    /// An origin is scheme + host + port
     pub allowed_origins: Vec<String>,
 }
 
 impl FetchConfig {
-    pub fn is_origin_allowed(&self, url: &Url) -> bool {
+    pub fn is_origin_allowed(&self, url: &url::Url) -> bool {
         if self.allowed_origins.is_empty() {
             return false;
         }
         let origin = url.origin().ascii_serialization();
-        self.allowed_origins.iter().any(|allowed| {
-            // Exact origin match
-            origin == *allowed
-        })
+        self.allowed_origins.iter().any(|allowed| origin == *allowed)
     }
 }
 
@@ -58,7 +85,6 @@ pub struct FetchResponse {
     pub body: String,
 }
 
-/// The fetch operation - validates origin and makes the request
 #[op2(async)]
 #[serde]
 pub async fn op_fetch(
@@ -71,7 +97,7 @@ pub async fn op_fetch(
         state_ref.borrow::<FetchConfig>().clone()
     };
 
-    // Delegate to the actual implementation
+    // Delegate to the actual implementation (can be called recursively for redirects)
     do_fetch(request, config).await
 }
 
@@ -80,6 +106,10 @@ async fn do_fetch(
     request: FetchRequest,
     config: FetchConfig,
 ) -> Result<FetchResponse, deno_core::error::AnyError> {
+    use anyhow::anyhow;
+    use reqwest::{Client, Method};
+    use url::Url;
+
     // Parse and validate URL
     let url = Url::parse(&request.url)
         .map_err(|e| anyhow!("Invalid URL '{}': {}", request.url, e))?;
@@ -94,7 +124,6 @@ async fn do_fetch(
 
     // Build the request
     let client = Client::builder()
-        // Don't follow redirects automatically - we'll handle them manually
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
@@ -112,19 +141,16 @@ async fn do_fetch(
 
     let mut req_builder = client.request(method, url.clone());
 
-    // Add headers
     if let Some(ref headers) = request.headers {
         for (key, value) in headers {
             req_builder = req_builder.header(key, value);
         }
     }
 
-    // Add body
     if let Some(body) = request.body {
         req_builder = req_builder.body(body);
     }
 
-    // Make the request
     let response = req_builder
         .send()
         .await
@@ -133,14 +159,13 @@ async fn do_fetch(
     let status = response.status();
     let final_url = response.url().clone();
 
-    // Handle redirects manually - only allow same-origin
+    // Handle redirects - only allow same-origin
     if status.is_redirection() {
         if let Some(location) = response.headers().get("location") {
             let location_str = location.to_str().map_err(|_| anyhow!("Invalid redirect location"))?;
             let redirect_url = final_url.join(location_str)
                 .map_err(|e| anyhow!("Invalid redirect URL: {}", e))?;
 
-            // Check if redirect is to same origin
             if redirect_url.origin() != url.origin() {
                 return Err(anyhow!(
                     "Fetch blocked: redirect to different origin '{}' (original: '{}')",
@@ -149,7 +174,6 @@ async fn do_fetch(
                 ).into());
             }
 
-            // Check if redirect origin is still allowed
             if !config.is_origin_allowed(&redirect_url) {
                 return Err(anyhow!(
                     "Fetch blocked: redirect origin '{}' is not in the allowlist",
@@ -157,19 +181,18 @@ async fn do_fetch(
                 ).into());
             }
 
-            // Follow the redirect recursively
+            // Follow redirect with a recursive call via Box::pin
             let redirect_request = FetchRequest {
                 url: redirect_url.to_string(),
-                method: Some("GET".to_string()), // Redirects typically become GET
+                method: Some("GET".to_string()),
                 headers: request.headers.clone(),
-                body: None, // Don't send body on redirect
+                body: None,
             };
 
             return Box::pin(do_fetch(redirect_request, config)).await;
         }
     }
 
-    // Collect response headers
     let mut resp_headers = HashMap::new();
     for (key, value) in response.headers() {
         if let Ok(v) = value.to_str() {
@@ -177,7 +200,6 @@ async fn do_fetch(
         }
     }
 
-    // Read body as text
     let body = response
         .text()
         .await
@@ -193,6 +215,22 @@ async fn do_fetch(
     })
 }
 
+// ============================================================================
+// Extension Definition
+// ============================================================================
+
+deno_core::extension!(
+    ssr_runtime,
+    ops = [
+        op_console_log,
+        op_console_warn,
+        op_console_error,
+        op_fetch,
+    ],
+    esm_entry_point = "ext:ssr_runtime/bootstrap.js",
+    esm = ["ext:ssr_runtime/bootstrap.js" = "src/bootstrap.js"],
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,14 +245,14 @@ mod tests {
         };
 
         // Allowed
-        assert!(config.is_origin_allowed(&Url::parse("https://api.example.com/users").unwrap()));
-        assert!(config.is_origin_allowed(&Url::parse("https://api.example.com/").unwrap()));
-        assert!(config.is_origin_allowed(&Url::parse("http://localhost:3000/api").unwrap()));
+        assert!(config.is_origin_allowed(&url::Url::parse("https://api.example.com/users").unwrap()));
+        assert!(config.is_origin_allowed(&url::Url::parse("https://api.example.com/").unwrap()));
+        assert!(config.is_origin_allowed(&url::Url::parse("http://localhost:3000/api").unwrap()));
 
         // Not allowed
-        assert!(!config.is_origin_allowed(&Url::parse("https://evil.com/api").unwrap()));
-        assert!(!config.is_origin_allowed(&Url::parse("http://api.example.com/users").unwrap())); // http vs https
-        assert!(!config.is_origin_allowed(&Url::parse("https://api.example.com:8080/").unwrap())); // different port
+        assert!(!config.is_origin_allowed(&url::Url::parse("https://evil.com/api").unwrap()));
+        assert!(!config.is_origin_allowed(&url::Url::parse("http://api.example.com/users").unwrap())); // http vs https
+        assert!(!config.is_origin_allowed(&url::Url::parse("https://api.example.com:8080/").unwrap())); // different port
     }
 
     #[test]
@@ -223,6 +261,6 @@ mod tests {
             allowed_origins: vec![],
         };
 
-        assert!(!config.is_origin_allowed(&Url::parse("https://anything.com").unwrap()));
+        assert!(!config.is_origin_allowed(&url::Url::parse("https://anything.com").unwrap()));
     }
 }

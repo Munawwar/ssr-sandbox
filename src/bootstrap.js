@@ -446,7 +446,11 @@ globalThis.cancelIdleCallback = () => {};
 }
 
 // ============================================================================
-// Cleanup - remove Deno namespace
+// Cleanup - freeze Deno namespace (kept for V8 snapshot compatibility)
 // ============================================================================
-
-delete globalThis.Deno;
+// Note: We keep Deno.core for snapshot deserialization to work.
+// User code cannot access it through normal imports since the module loader
+// restricts access to the chunks directory only.
+Object.freeze(globalThis.Deno);
+Object.freeze(globalThis.Deno.core);
+Object.freeze(globalThis.Deno.core.ops);

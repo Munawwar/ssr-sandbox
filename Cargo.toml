@@ -35,6 +35,22 @@ base64 = "~0.22"
 reqwest = { version = "~0.12", default-features = false, features = ["json", "rustls-tls"] }
 url = "~2.5"
 
+[build-dependencies]
+# Same versions as main dependencies for snapshot creation
+deno_core = "~0.311"
+deno_webidl = "~0.171"
+deno_web = "~0.202"
+deno_console = "~0.171"
+deno_url = "~0.171"
+deno_crypto = "~0.185"
+deno_permissions = "~0.31"
+serde_json = "~1.0"
+# Required for shared ops module
+serde = { version = "~1.0", features = ["derive"] }
+reqwest = { version = "~0.12", default-features = false, features = ["json", "rustls-tls"] }
+url = "~2.5"
+anyhow = "~1.0"
+
 [dev-dependencies]
 tempfile = "3"
 

@@ -9,6 +9,8 @@ The goal is to contain security exploits / supply chain attacks in frontend Java
 | Render time | 10-12ms | 10-12ms | **<0.1ms** |
 | Peak RAM | ~22 MB | ~22 MB | ~22 MB |
 
+Binary size: 48 MB (linux x86_64)
+
 # Usage
 
 Download the binary and check the integration example in examples directory
@@ -59,21 +61,49 @@ And limits resource usage by default:
 
 The sandbox provides these standard Web APIs for SSR compatibility:
 
+Full Support:
+| API | Notes |
+|-----|-------|
+| `AbortController/AbortSignal` | |
+| `atob/btoa` | |
+| `Blob/File/FileReader` | |
+| `CompressionStream/DecompressionStream` | gzip/deflate |
+| `crypto.getRandomValues` | |
+| `crypto.randomUUID` | |
+| `crypto.subtle.*` | Full Web Crypto API |
+| `DOMException` | |
+| `Event/EventTarget/CustomEvent` | |
+| `Intl.*` | V8 built-in |
+| `MessageChannel/MessagePort` | |
+| `performance.now()` | |
+| `queueMicrotask` | V8 built-in |
+| `ReadableStream/WritableStream/TransformStream` | |
+| `structuredClone` | |
+| `TextEncoder/TextDecoder` | |
+| `TextEncoderStream/TextDecoderStream` | |
+| `URL/URLSearchParams` | |
+| `URLPattern` | |
+
+Partial Support:
 | API | Status |
 |-----|--------|
-| `console.log/warn/error` | ✓ Captured to Rust |
-| `TextEncoder/TextDecoder` | ✓ |
-| `URL/URLSearchParams` | ✓ |
-| `atob/btoa` | ✓ |
-| `crypto.randomUUID` | ✓ |
-| `crypto.getRandomValues` | ✓ |
-| `crypto.subtle.digest` | ✓ SHA-256/384/512 |
-| `Intl.*` | ✓ V8 built-in |
-| `fetch` | ✓ Restricted to allowed origins |
-| `Headers/Request/Response` | ✓ For fetch API |
-| `setTimeout/setInterval` | Stubbed (no-op) |
+| `console.log/warn/error` | Captured in Rust, not printed |
+| `fetch` | Restricted to allowed origins |
+| `Headers/Request/Response` | Simplified (see below) |
 | `requestAnimationFrame` | Stubbed (no-op) |
-| `queueMicrotask` | ✓ V8 built-in |
+| `setTimeout/setInterval` | Stubbed (no-op) |
+
+### Fetch API Limitations
+
+`Headers`, `Request`, and `Response` are simplified implementations that cover common SSR use cases but are not fully spec-compliant:
+
+- `Response.body` returns the body as a string, not a `ReadableStream`
+- `Response.blob()` and `Response.formData()` are not implemented
+- `Request.body` is stored as a string, not a stream
+- No support for `Request.cache`, `Request.credentials`, `Request.mode`, `Request.redirect` options
+- `Headers` does not validate header names/values per spec
+
+These work fine for typical SSR patterns (calling JSON APIs, fetching text content), but may not work for advanced streaming or binary use cases.
 
 ## Binary Usage
 

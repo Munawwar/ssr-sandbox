@@ -15,6 +15,7 @@ use anyhow::{anyhow, Error};
 use deno_core::{op2, JsRuntime, ModuleSpecifier, OpState, PollEventLoopOptions, RuntimeOptions};
 use std::path::Path;
 use std::rc::Rc;
+use std::sync::Arc;
 
 /// Captured console output from the sandboxed runtime
 #[derive(Debug, Default, Clone)]
@@ -56,82 +57,14 @@ fn op_console_error(state: &mut OpState, #[string] msg: &str) {
     }
 }
 
-// ============================================================================
-// Crypto Ops
-// ============================================================================
-
-#[op2]
-#[string]
-fn op_crypto_random_uuid() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
-#[op2(fast)]
-fn op_crypto_get_random_values(#[buffer] buf: &mut [u8]) {
-    use rand::RngCore;
-    rand::thread_rng().fill_bytes(buf);
-}
-
-#[op2]
-#[buffer]
-fn op_crypto_subtle_digest(#[string] algorithm: &str, #[buffer] data: &[u8]) -> Result<Vec<u8>, Error> {
-    use sha2::{Sha256, Sha384, Sha512, Digest};
-
-    let result = match algorithm.to_uppercase().replace("-", "").as_str() {
-        "SHA256" => {
-            let mut hasher = Sha256::new();
-            hasher.update(data);
-            hasher.finalize().to_vec()
-        }
-        "SHA384" => {
-            let mut hasher = Sha384::new();
-            hasher.update(data);
-            hasher.finalize().to_vec()
-        }
-        "SHA512" => {
-            let mut hasher = Sha512::new();
-            hasher.update(data);
-            hasher.finalize().to_vec()
-        }
-        _ => return Err(anyhow!("Unsupported algorithm: {}. Supported: SHA-256, SHA-384, SHA-512", algorithm)),
-    };
-
-    Ok(result)
-}
-
-// ============================================================================
-// Encoding Ops
-// ============================================================================
-
-#[op2]
-#[string]
-fn op_btoa(#[string] data: &str) -> Result<String, Error> {
-    use base64::Engine;
-    // btoa expects Latin-1, but we'll be lenient and accept UTF-8
-    Ok(base64::engine::general_purpose::STANDARD.encode(data.as_bytes()))
-}
-
-#[op2]
-#[string]
-fn op_atob(#[string] data: &str) -> Result<String, Error> {
-    use base64::Engine;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(data)
-        .map_err(|e| anyhow!("Invalid base64: {}", e))?;
-    String::from_utf8(bytes).map_err(|e| anyhow!("Invalid UTF-8 in decoded data: {}", e))
-}
-
+// Our extension only needs console capture and fetch
+// crypto, atob, btoa, URL, TextEncoder etc. are provided by deno extensions
 deno_core::extension!(
     ssr_runtime,
     ops = [
         op_console_log,
         op_console_warn,
         op_console_error,
-        op_crypto_random_uuid,
-        op_crypto_get_random_values,
-        op_crypto_subtle_digest,
-        op_btoa,
-        op_atob,
         op_fetch,
     ],
     esm_entry_point = "ext:ssr_runtime/bootstrap.js",
@@ -170,9 +103,24 @@ pub fn create_runtime(config: &SandboxConfig) -> Result<JsRuntime, Error> {
         deno_core::v8::Isolate::create_params().heap_limits(0, max_bytes)
     });
 
+    // Create blob store for deno_web (required for Blob API)
+    let blob_store = Arc::new(deno_web::BlobStore::default());
+
     let mut runtime = JsRuntime::new(RuntimeOptions {
         module_loader: Some(Rc::new(loader)),
-        extensions: vec![ssr_runtime::init_ops_and_esm()],
+        extensions: vec![
+            // Deno extensions (order matters - dependencies first)
+            deno_webidl::deno_webidl::init_ops_and_esm(),
+            deno_console::deno_console::init_ops_and_esm(),
+            deno_url::deno_url::init_ops_and_esm(),
+            deno_web::deno_web::init_ops_and_esm::<deno_permissions::PermissionsContainer>(
+                blob_store,
+                None, // No location URL needed for SSR
+            ),
+            deno_crypto::deno_crypto::init_ops_and_esm(None), // No seed
+            // Our custom extension (fetch, console capture)
+            ssr_runtime::init_ops_and_esm(),
+        ],
         create_params,
         ..Default::default()
     });
